@@ -1,11 +1,17 @@
 name: codeql
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "main" ]
   schedule:
     - cron: '25 16 * * 2'
+  workflow_dispatch:
+    inputs:
+      languages:
+        description: "Languages to analyze"
+        required: true
+        default: "java-kotlin"
 jobs:
   analyze:
     name: analyze
@@ -14,7 +20,8 @@ jobs:
       actions: read
       contents: read
       security-events: write
-    if: github.event_name != 'schedule' || github.repository == 'beemdevelopment/Aegis'
+    env:
+      LANGUAGES: ${{ github.event.inputs.languages || 'java-kotlin' }}
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -33,10 +40,10 @@ jobs:
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v3
       with:
-        languages: java
+        languages: ${{ env.LANGUAGES }}
     - name: Build
       run: ./gradlew assembleDebug
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
       with:
-        category: "/language:${{matrix.language}}"
+        category: "/language:${{ env.LANGUAGES }}"
