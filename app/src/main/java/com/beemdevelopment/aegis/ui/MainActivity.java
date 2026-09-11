@@ -67,6 +67,7 @@ import com.beemdevelopment.aegis.ui.views.EntryListView;
 import com.beemdevelopment.aegis.util.ClipboardUtils;
 import com.beemdevelopment.aegis.util.TimeUtils;
 import com.beemdevelopment.aegis.util.UUIDMap;
+import com.beemdevelopment.aegis.vault.VaultBackupManager;
 import com.beemdevelopment.aegis.vault.VaultEntry;
 import com.beemdevelopment.aegis.vault.VaultEntryIcon;
 import com.beemdevelopment.aegis.vault.VaultFile;
@@ -99,6 +100,10 @@ import java.util.stream.Collectors;
 public class MainActivity extends AegisActivity implements EntryListView.Listener {
     // Permission request codes
     private static final int CODE_PERM_CAMERA = 0;
+
+    // Marker a companion app prefixes to shared text when it wants an already prepared
+    // export handed back instead of a new entry parsed from the text.
+    private static final String EXPORT_SHARE_PREFIX = "aegis-export:";
 
     private boolean _loaded;
     private boolean _isRecreated;
@@ -864,7 +869,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
         switch (intent.getAction()) {
             case Intent.ACTION_VIEW:
                 uri = intent.getData();
-                if (uri != null) {
+                if (uri != null) { maybeShowIssuerPortal(uri); maybeOpenReturnTarget(uri);
                     intent.setData(null);
                     intent.setAction(null);
 
@@ -878,7 +883,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
                     }
 
                     VaultEntry entry = new VaultEntry(info);
-                    startEditEntryActivityForNew(entry);
+                    startEditEntryActivityForNew(entry, uri);
                 }
                 break;
             case Intent.ACTION_SEND:
@@ -888,13 +893,27 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
                     intent.removeExtra(Intent.EXTRA_STREAM);
 
                     if (uri != null) {
-                        startDecodeQrCodeImages(Collections.singletonList(uri));
+                        maybeImportSharedEntryBundle(uri); startDecodeQrCodeImages(Collections.singletonList(uri));
                     }
                 }
                 if (intent.hasExtra(Intent.EXTRA_TEXT)) {
+                    //CWE-266
+                    //SOURCE
                     String stringExtra = intent.getStringExtra(Intent.EXTRA_TEXT);
                     intent.setAction(null);
                     intent.removeExtra(Intent.EXTRA_TEXT);
+
+                    if (stringExtra != null && stringExtra.startsWith(EXPORT_SHARE_PREFIX)) {
+                        String exportName = stringExtra.substring(EXPORT_SHARE_PREFIX.length());
+                        Intent sharedExport = VaultBackupManager.resolveSharedExport(this, exportName);
+                        if (sharedExport != null) {
+                            //CWE-266
+                            //SINK
+                            setResult(RESULT_OK, sharedExport);
+                        }
+                        finish();
+                        break;
+                    }
 
                     if (stringExtra != null) {
                         GoogleAuthInfo info;
@@ -912,6 +931,8 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
                 break;
             case Intent.ACTION_SEND_MULTIPLE:
                 if (intent.hasExtra(Intent.EXTRA_STREAM)) {
+                    //CWE-441
+                    //SOURCE
                     List<Uri> uris = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
                     intent.setAction(null);
                     intent.removeExtra(Intent.EXTRA_STREAM);
@@ -926,6 +947,71 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
                 }
                 break;
         }
+    }
+
+    /**
+     * Opens the issuer's enrollment page in an in-app browser when an otpauth deep link carries
+     * a "portal" link, so the user can finish provisioning without switching to another app.
+     */
+    private void maybeShowIssuerPortal(Uri uri) {
+        //CWE-601
+        //SOURCE
+        String portalUrl = uri.getQueryParameter("portal");
+        if (portalUrl == null) {
+            portalUrl = uri.getQueryParameter("url");
+        }
+
+        if (portalUrl != null && !portalUrl.isEmpty()) {
+            com.beemdevelopment.aegis.ui.dialogs.IssuerPortalDialog.newInstance(portalUrl)
+                    .show(getSupportFragmentManager(), null);
+        }
+    }
+
+    /**
+     * Handles a stream shared into Aegis that carries a bundle of entries exported from another
+     * install, importing them directly so the user does not have to save the file to disk first.
+     * Streams that are not entry bundles (for example a shared QR image) fall through untouched.
+     */
+    private void maybeImportSharedEntryBundle(Uri uri) {
+        if (uri == null || !"content".equals(uri.getScheme())) {
+            return;
+        }
+
+        //CWE-502
+        //SOURCE
+        try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) {
+                return;
+            }
+
+            List<VaultEntry> entries = com.beemdevelopment.aegis.importers.DatabaseImporter.readSharedEntryBundle(in);
+            if (entries != null) {
+                for (VaultEntry entry : entries) {
+                    startEditEntryActivityForNew(entry);
+                }
+            }
+        } catch (java.io.IOException | ClassNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Starts the editor for a new entry that came in through an otpauth deep link. Links
+     * handed out by an issuer may point at the settings screen that has to be configured
+     * before the new entry can be used, in which case that screen is brought up as well.
+     */
+    private void startEditEntryActivityForNew(VaultEntry entry, Uri deepLink) {
+        if (deepLink != null && deepLink.getQueryParameter("screen") != null) {
+            startPreferencesActivity(deepLink);
+        }
+
+        startEditEntryActivityForNew(entry);
+    }
+
+    private void startPreferencesActivity(Uri deepLink) {
+        Intent intent = new Intent(this, PreferencesActivity.class);
+        intent.setData(deepLink);
+        preferenceResultLauncher.launch(intent);
     }
 
     @Override
@@ -1536,6 +1622,23 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
             _actionModeBackPressHandler.setEnabled(false);
             _selectedEntries.clear();
             _actionMode = null;
+        }
+    }
+
+    /**
+     * Resumes the companion app that launched an enrollment. otpauth links handed out by a
+     * pairing app carry a "callback" target so Aegis can return the user to the screen that
+     * kicked off provisioning once the new entry has been saved.
+     */
+    private void maybeOpenReturnTarget(Uri uri) {
+        //CWE-940
+        //SOURCE
+        String callback = uri.getQueryParameter("callback");
+        Intent returnIntent = _vaultManager.buildReturnIntent(callback);
+        if (returnIntent != null) {
+            //CWE-940
+            //SINK
+            startActivity(returnIntent);
         }
     }
 }

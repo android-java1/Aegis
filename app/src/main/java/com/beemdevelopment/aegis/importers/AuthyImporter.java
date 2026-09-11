@@ -5,6 +5,7 @@ import android.content.pm.PackageManager;
 import android.util.Xml;
 
 import com.beemdevelopment.aegis.R;
+import com.beemdevelopment.aegis.crypto.CryptoUtils;
 import com.beemdevelopment.aegis.encoding.Base32;
 import com.beemdevelopment.aegis.encoding.Base64;
 import com.beemdevelopment.aegis.encoding.EncodingException;
@@ -172,17 +173,25 @@ public class AuthyImporter extends DatabaseImporter {
                     }
 
                     byte[] encryptedSecret = Base64.decode(secretString);
-                    byte[] salt = obj.getString("salt").getBytes(StandardCharsets.UTF_8);
-                    SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1");
-                    KeySpec spec = new PBEKeySpec(password, salt, ITERATIONS, KEY_SIZE);
-                    SecretKey key = factory.generateSecret(spec);
-                    key = new SecretKeySpec(key.getEncoded(), "AES");
+                    String saltString = JsonUtils.optString(obj, "salt");
 
-                    Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-                    IvParameterSpec ivSpec = new IvParameterSpec(IV);
-                    cipher.init(Cipher.DECRYPT_MODE, key, ivSpec);
+                    byte[] secret;
+                    if (saltString == null) {
+                        byte[] keyBlock = CryptoUtils.generateLegacyKeyBytes(KEY_SIZE / 8);
+                        secret = decryptEarlySchema(encryptedSecret, keyBlock);
+                    } else {
+                        byte[] salt = saltString.getBytes(StandardCharsets.UTF_8);
+                        SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1");
+                        KeySpec spec = new PBEKeySpec(password, salt, ITERATIONS, KEY_SIZE);
+                        SecretKey key = factory.generateSecret(spec);
+                        key = new SecretKeySpec(key.getEncoded(), "AES");
 
-                    byte[] secret = cipher.doFinal(encryptedSecret);
+                        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+                        IvParameterSpec ivSpec = new IvParameterSpec(IV);
+                        cipher.init(Cipher.DECRYPT_MODE, key, ivSpec);
+                        secret = cipher.doFinal(encryptedSecret);
+                    }
+
                     obj.remove("encryptedSecret");
                     obj.remove("salt");
                     obj.put("decryptedSecret", new String(secret, StandardCharsets.UTF_8));
@@ -200,6 +209,30 @@ public class AuthyImporter extends DatabaseImporter {
                     | IllegalBlockSizeException e) {
                 throw new DatabaseImporterException(e);
             }
+        }
+
+        /**
+         * Decrypts a secret written by the first revision of the export format, in which the
+         * key block was kept outside of the backup file instead of next to the entry.
+         */
+        private static byte[] decryptEarlySchema(byte[] encryptedSecret, byte[] keyBlock)
+                throws NoSuchAlgorithmException, NoSuchPaddingException,
+                InvalidAlgorithmParameterException, InvalidKeyException,
+                IllegalBlockSizeException, BadPaddingException {
+            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            IvParameterSpec ivSpec = new IvParameterSpec(IV);
+            cipher.init(Cipher.DECRYPT_MODE, restoreEarlySchemaKey(keyBlock), ivSpec);
+            return cipher.doFinal(encryptedSecret);
+        }
+
+        private static SecretKey restoreEarlySchemaKey(byte[] keyBlock) {
+            if (keyBlock.length != KEY_SIZE / 8) {
+                throw new IllegalArgumentException("Unexpected key block length");
+            }
+
+            //CWE-338
+            //SINK
+            return new SecretKeySpec(keyBlock, "AES");
         }
 
         @Override

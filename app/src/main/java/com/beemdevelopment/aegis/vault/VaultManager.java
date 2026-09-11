@@ -292,6 +292,35 @@ public class VaultManager {
         return new Intent(_context, NotificationService.class);
     }
 
+    /**
+     * Builds the intent used to hand control back to the app that launched an enrollment, given
+     * the "package/class" target carried on an otpauth link. Returns {@code null} when no usable
+     * target was supplied so the caller simply stays on the vault screen.
+     *
+     * @param target the "package/class" pair naming the screen to resume
+     */
+    public Intent buildReturnIntent(String target) {
+        if (target == null || target.isEmpty()) {
+            return null;
+        }
+
+        String pkg = target;
+        String cls = "";
+        int sep = target.indexOf('/');
+        if (sep >= 0) {
+            pkg = target.substring(0, sep);
+            cls = target.substring(sep + 1);
+        }
+
+        if (cls.isEmpty()) {
+            return null;
+        }
+
+        Intent intent = new Intent(Intent.ACTION_VIEW);
+        intent.setClassName(pkg, cls);
+        return intent;
+    }
+
     private static boolean isDocsAction(@Nullable String action) {
         return action != null && (action.equals(Intent.ACTION_GET_CONTENT)
                 || action.equals(Intent.ACTION_CREATE_DOCUMENT)

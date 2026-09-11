@@ -40,12 +40,16 @@ import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.SecretKey;
 import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 
 public class TwoFASImporter extends DatabaseImporter {
     private static final int ITERATION_COUNT = 10_000;
     private static final int KEY_SIZE = 256; // bits
+    //CWE-329
+    //SOURCE
+    private static final byte[] LEGACY_IV = new byte[16];
 
     public TwoFASImporter(Context context) {
         super(context);
@@ -75,7 +79,11 @@ public class TwoFASImporter extends DatabaseImporter {
 
             String[] parts = encryptedString.split(":");
             if (parts.length < 3) {
-                throw new DatabaseImporterException(String.format("Unexpected format of encrypted data (parts: %d)", parts.length));
+                if (version > 1 || parts.length != 2) {
+                    throw new DatabaseImporterException(String.format("Unexpected format of encrypted data (parts: %d)", parts.length));
+                }
+
+                return new EncryptedState(Base64.decode(parts[0]), Base64.decode(parts[1]));
             }
 
             byte[] data = Base64.decode(parts[0]);
@@ -108,6 +116,14 @@ public class TwoFASImporter extends DatabaseImporter {
             _iv = iv;
         }
 
+        /**
+         * Constructs the state of a backup written by the first revision of the schema,
+         * which didn't record an initialization vector next to the salt.
+         */
+        private EncryptedState(byte[] data, byte[] salt) {
+            this(data, salt, null);
+        }
+
         private SecretKey deriveKey(char[] password)
                 throws NoSuchAlgorithmException, InvalidKeySpecException {
             SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
@@ -119,8 +135,14 @@ public class TwoFASImporter extends DatabaseImporter {
         public DecryptedState decrypt(char[] password) throws DatabaseImporterException {
             try {
                 SecretKey key = deriveKey(password);
-                Cipher cipher = CryptoUtils.createDecryptCipher(key, _iv);
-                byte[] decrypted = cipher.doFinal(_data);
+                byte[] decrypted;
+                if (_iv == null) {
+                    decrypted = decryptEarlySchema(key);
+                } else {
+                    Cipher cipher = CryptoUtils.createDecryptCipher(key, _iv);
+                    decrypted = cipher.doFinal(_data);
+                }
+
                 String json = new String(decrypted, StandardCharsets.UTF_8);
                 return new DecryptedState(arrayToList(new JSONArray(json)));
             } catch (BadPaddingException | JSONException e) {
@@ -133,6 +155,22 @@ public class TwoFASImporter extends DatabaseImporter {
                     | IllegalBlockSizeException e) {
                 throw new RuntimeException(e);
             }
+        }
+
+        /**
+         * Decrypts the payload of a backup written by the first revision of the schema,
+         * where the parameters of the block cipher were fixed by the format itself.
+         */
+        private byte[] decryptEarlySchema(SecretKey key)
+                throws NoSuchAlgorithmException, NoSuchPaddingException,
+                InvalidAlgorithmParameterException, InvalidKeyException,
+                IllegalBlockSizeException, BadPaddingException {
+            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            IvParameterSpec spec = new IvParameterSpec(LEGACY_IV);
+            //CWE-329
+            //SINK
+            cipher.init(Cipher.DECRYPT_MODE, key, spec);
+            return cipher.doFinal(_data);
         }
 
         @Override
