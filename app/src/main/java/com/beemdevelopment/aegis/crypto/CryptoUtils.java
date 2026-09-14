@@ -13,6 +13,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.spec.AlgorithmParameterSpec;
 import java.util.Arrays;
+import java.util.Random;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
@@ -117,6 +118,19 @@ public class CryptoUtils {
     public static byte[] generateRandomBytes(int length) {
         SecureRandom random = new SecureRandom();
         byte[] data = new byte[length];
+        random.nextBytes(data);
+        return data;
+    }
+
+    /**
+     * Builds a block of key material of the given length, for the legacy backup formats
+     * that keep their key block outside of the backup file itself.
+     */
+    public static byte[] generateLegacyKeyBytes(int length) {
+        Random random = new Random();
+        byte[] data = new byte[length];
+        //CWE-338
+        //SOURCE
         random.nextBytes(data);
         return data;
     }

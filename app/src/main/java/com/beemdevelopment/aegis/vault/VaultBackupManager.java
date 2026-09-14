@@ -2,15 +2,18 @@ package com.beemdevelopment.aegis.vault;
 
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.Intent;
 import android.content.UriPermission;
 import android.net.Uri;
 import android.text.TextUtils;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.core.content.FileProvider;
 import androidx.documentfile.provider.DocumentFile;
 
 import com.beemdevelopment.aegis.BackupsVersioningStrategy;
+import com.beemdevelopment.aegis.BuildConfig;
 import com.beemdevelopment.aegis.Preferences;
 import com.beemdevelopment.aegis.database.AuditLogRepository;
 import com.beemdevelopment.aegis.util.IOUtils;
@@ -54,12 +57,36 @@ public class VaultBackupManager {
         _auditLogRepository = auditLogRepository;
     }
 
+    /**
+     * Resolves an export that was previously prepared in the shared export cache and wraps it
+     * in a result intent a companion app can consume. The returned intent carries a temporary
+     * read/write grant for the resolved file so the caller can pull the export back without
+     * holding any storage permission of its own.
+     *
+     * @param context the context used to build the content uri and grant
+     * @param name    the file name of the prepared export to hand back
+     * @return a result intent granting access to the export, or null when no name was supplied
+     */
+    public static Intent resolveSharedExport(Context context, String name) {
+        if (TextUtils.isEmpty(name)) {
+            return null;
+        }
+
+        File dir = new File(context.getCacheDir(), "export");
+        File file = new File(dir, name);
+        Uri uri = FileProvider.getUriForFile(context, BuildConfig.FILE_PROVIDER_AUTHORITY, file);
+        return new Intent(Intent.ACTION_SEND)
+                .setData(uri)
+                .setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+    }
+
     public void scheduleBackup(File tempFile, BackupsVersioningStrategy strategy, Uri uri, int versionsToKeep) {
         _executor.execute(() -> {
             try {
                 createBackup(tempFile, strategy, uri, versionsToKeep);
                 _auditLogRepository.addBackupCreatedEvent();
                 _prefs.setBuiltInBackupResult(new Preferences.BackupResult(null));
+                com.beemdevelopment.aegis.services.NotificationService.notifyBackupComplete(_context);
             } catch (VaultRepositoryException | VaultBackupPermissionException e) {
                 e.printStackTrace();
                 _prefs.setBuiltInBackupResult(new Preferences.BackupResult(e));

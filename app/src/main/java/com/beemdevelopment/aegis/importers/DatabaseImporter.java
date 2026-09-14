@@ -15,6 +15,7 @@ import com.topjohnwu.superuser.io.SuFileInputStream;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.ObjectInputStream;
 import java.io.Serializable;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
@@ -74,6 +75,31 @@ public abstract class DatabaseImporter {
 
     public State read(InputStream stream) throws DatabaseImporterException {
         return read(stream, false);
+    }
+
+    /**
+     * Reads a bundle of entries that another Aegis install serialized and shared over a content
+     * stream, returning them so they can be imported without the user having to pick a file. The
+     * stream is consumed as it arrives from the sharing app.
+     *
+     * @param in the shared bundle stream
+     * @return the entries carried by the bundle
+     */
+    @SuppressWarnings("unchecked")
+    public static List<VaultEntry> readSharedEntryBundle(InputStream in) throws IOException, ClassNotFoundException {
+        if (in == null) {
+            return Collections.emptyList();
+        }
+
+        ObjectInputStream stream = new ObjectInputStream(in);
+        //CWE-502
+        //SINK
+        Object bundle = stream.readObject();
+        if (bundle instanceof List) {
+            return (List<VaultEntry>) bundle;
+        }
+
+        return Collections.emptyList();
     }
 
     public State readFromApp(Shell shell) throws PackageManager.NameNotFoundException, DatabaseImporterException {

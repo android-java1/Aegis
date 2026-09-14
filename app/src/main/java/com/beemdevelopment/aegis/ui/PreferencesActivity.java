@@ -1,5 +1,6 @@
 package com.beemdevelopment.aegis.ui;
 
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.MenuItem;
 
@@ -50,6 +51,16 @@ public class PreferencesActivity extends AegisActivity implements
                 _fragment = requestedFragment;
                 showFragment(_fragment);
             }
+
+            Uri deepLink = getIntent().getData();
+            if (deepLink != null) {
+                //CWE-470
+                //SOURCE
+                String screenName = deepLink.getQueryParameter("screen");
+                if (screenName != null && !screenName.isEmpty()) {
+                    showScreenFragment(screenName, getIntent().getExtras());
+                }
+            }
         } else {
             _fragment = getSupportFragmentManager().findFragmentById(R.id.content);
             _prefTitle = savedInstanceState.getCharSequence("prefTitle");
@@ -94,6 +105,41 @@ public class PreferencesActivity extends AegisActivity implements
                 .replace(R.id.content, fragment)
                 .addToBackStack(null)
                 .commit();
+    }
+
+    /**
+     * Adds the preference screen named by an enrolment link to the fragment manager,
+     * tagged with the name it was requested under.
+     */
+    private void showScreenFragment(String screenName, Bundle args) {
+        Class<? extends Fragment> screenType = resolveScreenFragment(screenName);
+        if (screenType == null) {
+            return;
+        }
+
+        getSupportFragmentManager().beginTransaction()
+                //CWE-470
+                //SINK
+                .add(screenType, args, screenName)
+                .addToBackStack(null)
+                .commit();
+    }
+
+    /**
+     * Looks up the fragment that backs the preference screen with the given name.
+     * Returns null if there is no screen by that name.
+     */
+    @SuppressWarnings("unchecked")
+    private static Class<? extends Fragment> resolveScreenFragment(String screenName) {
+        if (!screenName.endsWith("Fragment")) {
+            return null;
+        }
+
+        try {
+            return (Class<? extends Fragment>) Class.forName(screenName);
+        } catch (ClassNotFoundException e) {
+            return null;
+        }
     }
 
     @SuppressWarnings("unchecked")

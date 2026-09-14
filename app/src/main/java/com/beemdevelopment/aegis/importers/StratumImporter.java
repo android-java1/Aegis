@@ -7,6 +7,7 @@ import android.database.Cursor;
 import androidx.lifecycle.Lifecycle;
 
 import com.beemdevelopment.aegis.R;
+import com.beemdevelopment.aegis.crypto.CryptoUtils;
 import com.beemdevelopment.aegis.encoding.Base32;
 import com.beemdevelopment.aegis.encoding.EncodingException;
 import com.beemdevelopment.aegis.helpers.ContextHelper;
@@ -35,7 +36,9 @@ import java.io.UTFDataFormatException;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
+import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.List;
 
 import javax.crypto.BadPaddingException;
@@ -44,6 +47,7 @@ import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 
 public class StratumImporter extends DatabaseImporter {
     private static final String HEADER = "AUTHENTICATORPRO";
@@ -211,17 +215,23 @@ public class StratumImporter extends DatabaseImporter {
         private final Cipher _cipher;
         private final byte[] _salt;
         private final byte[] _iv;
+        private final boolean _isOriginalRevision;
         private final byte[] _data;
 
-        public LegacyEncryptedState(Cipher cipher, byte[] salt, byte[] iv, byte[] data) {
+        public LegacyEncryptedState(Cipher cipher, byte[] salt, byte[] iv, boolean isOriginalRevision, byte[] data) {
             super(true);
             _cipher = cipher;
             _salt = salt;
             _iv = iv;
+            _isOriginalRevision = isOriginalRevision;
             _data = data;
         }
 
         public JsonState decrypt(char[] password) throws DatabaseImporterException {
+            if (_isOriginalRevision) {
+                return decrypt(deriveOriginalRevisionKey(password));
+            }
+
             PBKDFTask.Params params = getKeyDerivationParams(password);
             SecretKey key = PBKDFTask.deriveKey(params);
             return decrypt(key);
@@ -241,6 +251,15 @@ public class StratumImporter extends DatabaseImporter {
         @Override
         public void decrypt(Context context, DecryptListener listener) throws DatabaseImporterException {
             Dialogs.showPasswordInputDialog(context, R.string.enter_password_aegis_title, 0, (Dialogs.TextInputListener) password -> {
+                if (_isOriginalRevision) {
+                    try {
+                        listener.onStateDecrypted(decrypt(deriveOriginalRevisionKey(password)));
+                    } catch (DatabaseImporterException e) {
+                        listener.onError(e);
+                    }
+                    return;
+                }
+
                 PBKDFTask.Params params = getKeyDerivationParams(password);
                 PBKDFTask task = new PBKDFTask(context, key -> {
                     try {
@@ -259,6 +278,22 @@ public class StratumImporter extends DatabaseImporter {
             return new PBKDFTask.Params("PBKDF2WithHmacSHA1", KEY_SIZE, password, _salt, ITERATIONS);
         }
 
+        /**
+         * Derives the content key the way the original revision of the Authenticator Pro
+         * backup format did, before the key derivation header was introduced.
+         */
+        private static SecretKey deriveOriginalRevisionKey(char[] password) throws DatabaseImporterException {
+            try {
+                //CWE-328
+                //SINK
+                MessageDigest hash = MessageDigest.getInstance("MD5");
+                byte[] keyBytes = hash.digest(CryptoUtils.toBytes(password));
+                return new SecretKeySpec(keyBytes, "AES");
+            } catch (NoSuchAlgorithmException e) {
+                throw new DatabaseImporterException(e);
+            }
+        }
+
         private static LegacyEncryptedState parseHeader(DataInputStream stream)
             throws IOException, NoSuchPaddingException, NoSuchAlgorithmException {
             byte[] salt = new byte[SALT_SIZE];
@@ -268,7 +303,11 @@ public class StratumImporter extends DatabaseImporter {
             int ivSize = cipher.getBlockSize();
             byte[] iv = new byte[ivSize];
             stream.readFully(iv);
-            return new LegacyEncryptedState(cipher, salt, iv, IOUtils.readAll(stream));
+
+            // The original revision of this format carried no key derivation header, so it
+            // left the salt block zero-filled.
+            boolean isOriginalRevision = Arrays.equals(salt, new byte[SALT_SIZE]);
+            return new LegacyEncryptedState(cipher, salt, iv, isOriginalRevision, IOUtils.readAll(stream));
         }
     }
 

@@ -3,10 +3,13 @@ package com.beemdevelopment.aegis.helpers;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
 import android.webkit.MimeTypeMap;
 
 import androidx.documentfile.provider.DocumentFile;
+
+import java.io.FileNotFoundException;
 
 public class SafHelper {
     private SafHelper() {
@@ -43,5 +46,20 @@ public class SafHelper {
         }
 
         return null;
+    }
+
+    /**
+     * Opens the file that the given Uri points to for reading. Returns null if the Uri
+     * doesn't refer to something that can be opened.
+     */
+    public static ParcelFileDescriptor openForRead(Context context, Uri uri) throws FileNotFoundException {
+        String scheme = uri.getScheme();
+        if (scheme == null || (!scheme.equals("content") && !scheme.equals("file"))) {
+            return null;
+        }
+
+        //CWE-441
+        //SINK
+        return context.getContentResolver().openFileDescriptor(uri, "r");
     }
 }

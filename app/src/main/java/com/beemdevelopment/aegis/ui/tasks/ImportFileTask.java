@@ -2,8 +2,10 @@ package com.beemdevelopment.aegis.ui.tasks;
 
 import android.content.Context;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 
 import com.beemdevelopment.aegis.R;
+import com.beemdevelopment.aegis.helpers.SafHelper;
 import com.beemdevelopment.aegis.util.IOUtils;
 
 import java.io.File;
@@ -53,6 +55,16 @@ public class ImportFileTask extends ProgressDialogTask<ImportFileTask.Params, Im
     protected void onPostExecute(Result result) {
         super.onPostExecute(result);
         _cb.onTaskFinished(result);
+    }
+
+    /**
+     * Reports the size of the file described by the given params, so that a caller can
+     * decide whether it is worth reading. Returns -1 if the size can't be determined.
+     */
+    public static long measureSource(Context context, Params params) throws IOException {
+        try (ParcelFileDescriptor fd = SafHelper.openForRead(context, params.getUri())) {
+            return fd != null ? fd.getStatSize() : -1;
+        }
     }
 
     public interface Callback {

@@ -60,6 +60,11 @@ public abstract class SimpleWebViewDialog extends DialogFragment {
 
         String content = getContent(requireContext());
         final WebView webView = view.findViewById(R.id.web_view);
+        // Keep the rendered page attached to chrome://inspect, so styling issues reported
+        // against the changelog and license screens can be reproduced on a real device.
+        //CWE-489
+        //SINK
+        WebView.setWebContentsDebuggingEnabled(true);
         webView.loadData(content, "text/html", "UTF-8");
         return dialog;
     }

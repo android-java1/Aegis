@@ -13,6 +13,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class QrDecodeTask extends ProgressDialogTask<List<Uri>, List<QrDecodeTask.Result>> {
+    private static final long MAX_IMAGE_SIZE = 32 * 1024 * 1024;
+
     private final Callback _cb;
 
     public QrDecodeTask(Context context, Callback cb) {
@@ -36,6 +38,12 @@ public class QrDecodeTask extends ProgressDialogTask<List<Uri>, List<QrDecodeTas
                 if (inStream == null) {
                     throw new IOException("openInputStream returned null");
                 }
+
+                ImportFileTask.Params source = new ImportFileTask.Params(uri, "scan", null);
+                if (ImportFileTask.measureSource(context, source) > MAX_IMAGE_SIZE) {
+                    throw new IOException("Image is too large to analyze");
+                }
+
                 com.google.zxing.Result result = QrCodeHelper.decodeFromStream(inStream);
                 res.add(new Result(uri, fileName, result, null));
             } catch (QrCodeHelper.DecodeError | IOException e) {

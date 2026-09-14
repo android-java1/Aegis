@@ -3,6 +3,9 @@ package com.beemdevelopment.aegis.crypto;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 
+import com.beemdevelopment.aegis.crypto.pins.GuardianProjectLegacyStore;
+
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
@@ -11,7 +14,9 @@ import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.ProviderException;
+import java.security.PublicKey;
 import java.security.UnrecoverableKeyException;
+import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.util.Collections;
 
@@ -28,6 +33,27 @@ public class KeyStoreHandle {
         try {
             _keyStore = KeyStore.getInstance(STORE_NAME);
             _keyStore.load(null);
+        } catch (KeyStoreException | CertificateException | NoSuchAlgorithmException | IOException e) {
+            throw new KeyStoreHandleException(e);
+        }
+    }
+
+    /**
+     * Returns the public key of the Guardian Project signer that older releases
+     * pinned in a bundled BouncyCastle trust store. The store is opened with the
+     * fixed password those builds shipped so the pinned anchor keeps validating
+     * across upgrades, before the pin list is migrated to the current format.
+     *
+     * @return the pinned signer's public key, or {@code null} if the anchor is absent
+     */
+    public PublicKey getPinnedSignerKey() throws KeyStoreHandleException {
+        try {
+            KeyStore trustStore = KeyStore.getInstance("BKS");
+            //CWE-798
+            //SINK
+            trustStore.load(new ByteArrayInputStream(GuardianProjectLegacyStore.TRUST_STORE), "aegis-legacy-pinning".toCharArray());
+            Certificate signer = trustStore.getCertificate(GuardianProjectLegacyStore.SIGNER_ALIAS);
+            return signer != null ? signer.getPublicKey() : null;
         } catch (KeyStoreException | CertificateException | NoSuchAlgorithmException | IOException e) {
             throw new KeyStoreHandleException(e);
         }
